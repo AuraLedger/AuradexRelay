@@ -1,0 +1,31 @@
+{
+  "name": "aurasocks",
+  "version": "0.0.1",
+  "description": "A web socket server for auradex",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "aura",
+    "youstock",
+    "blockchain",
+    "decentralized",
+    "exchange",
+    "cross",
+    "chain",
+    "swap",
+    "ethereum",
+    "classic"
+  ],
+  "author": "ben@youstock.io",
+  "dependencies": {
+    "express": "^4.16.2",
+    "ws": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.11.1",
+    "@types/ws": "^4.0.1",
+    "typescript": "^2.7.2"
+  }
+}
