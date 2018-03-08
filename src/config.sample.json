@@ -1,0 +1,14 @@
+{
+    "listening_port": 8999,
+    "mongo_conn_str": "mongodb://localhost:27017",
+    "market_db_name": "ara_eth",
+    "baseNodeConfig": {
+        "type": "Ether",
+        "rpcUrl": "https://mainnet.infura.io/[YOUR_API_KEY]"
+    },
+    "coinNodeConfig": {
+        "type": "Ether",
+        "rpcUrl": "http://localhost:8545"
+    },
+    "adminKey": "YOUR_ADMIN_KEY"
+}

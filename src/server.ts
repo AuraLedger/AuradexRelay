@@ -5,11 +5,9 @@ import * as mongodb from 'mongodb';
 import * as SortedArray from 'sorted-array';
 import * as randomstring from 'randomstring';
 
-import { Config, NodeConfig } from './config';
-let config: Config = require('./config.json');
+import { NodeConfig, INode, NodeFactory } from './lib/libauradex';
+let config: any = require('./config.json');
 
-import { NodeInterface } from './nodeInterface';
-import { NodeFactory } from './nodeFactory';
 
 interface ExtWebSocket extends WebSocket {
     isAlive: boolean;
@@ -21,8 +19,8 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const mongoClient = mongodb.MongoClient;
 
-const coinNode: NodeInterface = NodeFactory.Create(config.coinNodeConfig); 
-const baseNode: NodeInterface = NodeFactory.Create(config.baseNodeConfig); 
+const coinNode: INode = NodeFactory.Create(config.coinNodeConfig); 
+const baseNode: INode = NodeFactory.Create(config.baseNodeConfig); 
 
 //minimum order size of base, should be based on avg transaction fee of network
 var globalBaseMin = {
