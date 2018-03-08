@@ -4,7 +4,9 @@
   "description": "A web socket server for auradex",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node dist/server/server.js",
+    "dist": "gulp"
   },
   "keywords": [
     "aura",
@@ -32,6 +34,8 @@
     "@types/mongodb": "^3.0.5",
     "@types/underscore": "^1.8.7",
     "@types/ws": "^4.0.1",
+    "gulp": "^3.9.1",
+    "gulp-run": "^1.7.1",
     "typescript": "^2.7.2"
   }
 }
