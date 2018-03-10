@@ -2,6 +2,8 @@
     "listening_port": 8999,
     "mongo_conn_str": "mongodb://localhost:27017",
     "market_db_name": "ara_eth",
+    "coinFeeRate": 20,
+    "baseFeeRate": 20,
     "baseNodeConfig": {
         "type": "Ether",
         "rpcUrl": "https://mainnet.infura.io/[YOUR_API_KEY]"

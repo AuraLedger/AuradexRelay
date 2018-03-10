@@ -1,7 +1,6 @@
 import * as mongodb from 'mongodb';
 
-import { Config, NodeConfig } from './config';
-let config: Config = require('./config.json');
+let config: any = require('./config.json');
 
 const mongoClient = mongodb.MongoClient;
 

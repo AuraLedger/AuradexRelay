@@ -5,7 +5,7 @@ import * as mongodb from 'mongodb';
 import * as SortedArray from 'sorted-array';
 import * as randomstring from 'randomstring';
 
-import { NodeConfig, INode, NodeFactory } from './lib/libauradex';
+import { NodeConfig, INode, NodeFactory, DexUtils } from './lib/libauradex';
 let config: any = require('./config.json');
 
 
@@ -21,6 +21,12 @@ const mongoClient = mongodb.MongoClient;
 
 const coinNode: INode = NodeFactory.Create(config.coinNodeConfig); 
 const baseNode: INode = NodeFactory.Create(config.baseNodeConfig); 
+
+var coinFeeRate: number = config.coinFeeRate;
+var baseFeeRate: number = config.baseFeeRate;
+
+coinNode.setFeeRate(coinFeeRate);
+baseNode.setFeeRate(baseFeeRate);
 
 //minimum order size of base, should be based on avg transaction fee of network
 var globalBaseMin = {
@@ -78,7 +84,13 @@ var socks = {
 };
 
 //map ws challenge to address
-var challs = {
+var challengeMap = {
+    bid: {},
+    ask: {}
+};
+
+//map address to book balance
+var balanceMap = {
     bid: {},
     ask: {}
 };
@@ -92,7 +104,15 @@ function broadcast(data) {
     });
 };
 
+wss.on('error', (err) => {
+    try {
+        logErr(err);
+    } catch {};
+});
+
 wss.on('connection', (ws: WebSocket) => {
+
+    try {
 
     const extWs = ws as ExtWebSocket;
     extWs .isAlive = true;
@@ -109,6 +129,11 @@ wss.on('connection', (ws: WebSocket) => {
         logErr(error);
     };
 
+    ws.on('error', (err: any) => {
+        if(err.errno == 'ECONNRESET') return;
+        logErr(err);
+    });
+
     ws.on('close', function() {
         disconnect(extWs);
         ws.terminate();
@@ -116,33 +141,53 @@ wss.on('connection', (ws: WebSocket) => {
 
     //connection is up 
     ws.on('message', (message: string) => {
-        var json = JSON.parse(message);
+        try {
+            var json = JSON.parse(message);
 
-        //route actions
-        switch(json.act)
-        {
-            case 'register': register(json, extWs); break; 
-            case 'disconnect': disconnect(extWs); break; 
+            //route actions
+            switch(json.act)
+            {
+                case 'register': register(json, extWs); break; 
+                case 'disconnect': disconnect(extWs); break; 
 
-            case 'getBooks': getBooks(extWs); break;
-            case 'getNonce': getNonce(json, extWs); break;
-            case 'getHistory': getHistory(json, extWs); break;
+                case 'getBooks': getBooks(extWs); break;
+                case 'getNonce': getNonce(extWs); break;
+                case 'getHistory': getHistory(json, extWs); break;
 
-            case 'bid': newEntry(json, extWs); break;
-            case 'ask': newEntry(json, extWs); break;
-            case 'cancel': cancel(json, extWs); break; 
-            case 'enableEntry': enableEntry(json, extWs); break;
+                case 'bid': newEntry(clean(json), extWs); break;
+                case 'ask': newEntry(clean(json), extWs); break;
+                case 'cancel': cancel(json, extWs); break; 
+                case 'enableEntry': enableEntry(json, extWs); break;
 
-            case 'readyTrade': readyTrade(json, extWs); break;
+                case 'readyTrade': readyTrade(json, extWs); break;
 
-            case 'createIndexes': createIndexes(json); break;
+                case 'createIndexes': createIndexes(json); break;
+                case 'setFeeRates': setFeeRates(json); break;
+            }
+        } catch(ex) {
+            try {
+                ws.send('{"act": "err", "err": "WHAT... DID YOU... DO!!!"}');
+            } catch { }
+
+            try {
+                logErr(ex);
+            } catch { }
         }
     });
 
     //request client to register their addresses
     extWs.challenge = randomstring.generate();
-    while(challs.ask.hasOwnProperty(extWs.challenge)) extWs.challenge = randomstring.generate(); //just in case...
+    while(challengeMap.ask.hasOwnProperty(extWs.challenge)) extWs.challenge = randomstring.generate(); //just in case...
     ws.send('{"act": "register", "challenge": "' + extWs.challenge + '"}');
+    ws.send(feeRateMessage());
+
+    //send current books
+    books.ask.array.forEach(a => { ws.send(JSON.stringify(a));});
+        books.bid.array.forEach(b => { ws.send(JSON.stringify(b));});
+
+    } catch (err) {
+        logErr({err: err, msg: 'fatal error during connection'});
+    }
 });
 
 function readyTrade(obj, ws) {
@@ -158,9 +203,9 @@ function readyTrade(obj, ws) {
     var address1 = maps[key1][trade.id1];
     var address2 = maps[key2][trade.id2];
 
-    if(challs[key1][ws.challenge] == address1)
+    if(challengeMap[key1][ws.challenge] == address1)
         socks[key2][address2].send('{"act": "readyTrade", "_id": ' + trade._id + '}');
-    else if(challs[key2][ws.challenge] == address2)
+    else if(challengeMap[key2][ws.challenge] == address2)
         socks[key1][address1].send('{"act": "readyTrade", "_id": ' + trade._id + '}');
 }
 
@@ -172,22 +217,10 @@ function register(obj, ws) {
     verifyRegistration(obj, ws, function() {
         socks.bid[obj.baseAddress] = ws;
         socks.ask[obj.coinAddress] = ws;
-        challs.bid[ws.challange] = obj.baseAddress;
-        challs.ask[ws.challange] = obj.coinAddress;
+        challengeMap.bid[ws.challenge] = obj.baseAddress;
+        challengeMap.ask[ws.challenge] = obj.coinAddress;
 
-        getMaxNonce(mongo.bid, obj.baseAddress, function(n) {
-            ws.send('{"act": "nonce", "type": "bid", "val": '+n+'}');
-        }, function(err) {
-            logErr(err);
-            ws.send('{"act": "err", "err": "error getting bid nonce"}');
-        });
-
-        getMaxNonce(mongo.ask, obj.coinAddress, function(n) {
-            ws.send('{"act": "nonce", "type": "ask", "val": '+n+'}');
-        }, function(err) {
-            logErr(err);
-            ws.send('{"act": "err", "err": "error getting ask nonce"}');
-        });
+        getNonce(ws);
     }, function(err) {
         logErr(err);
         ws.send('{"act": "err", "err": "error registering"}');
@@ -223,6 +256,12 @@ function restoreEntryToMaps(entry) {
 function addEntryToMaps(entry) {
     books[entry.act].insert(entry);
     maps[entry.act][entry._id] = entry;
+
+    var bal = entry.act == 'bid' ? entry.price * entry.amount + baseNode.getInitFee() : entry.amount + coinNode.getInitFee();
+    balanceMap[entry.act][entry.address] = bal + (balanceMap[entry.act][entry.address] || 0);
+
+    var rbal = entry.act == 'bid' ? coinNode.getRedeemFee() : baseNode.getRedeemFee();
+    balanceMap[oppoAct[entry.act]][entry.redeemAddress] = Math.max((balanceMap[oppoAct[entry.act]][entry.redeemAddress] || 0) - rbal, 0);
 }
 
 function addTrade(t) {
@@ -232,10 +271,10 @@ function addTrade(t) {
 function enableEntry(obj, ws) {
     //ensure ws is owner of entry id
     var entry = maps[obj.entryType][obj._id];
-    if(challs[obj.entryType][ws.challenge] == entry.address)
+    if(challengeMap[obj.entryType][ws.challenge] == entry.address)
     {
         entry.online = 1;
-        broadcast('{"act": "update", "type": "' + entry.act + '", "_id": ' + entry._id + ', "prop": "online", "val": 1}');
+        broadcast('{"act": "update", "entryType": "' + entry.act + '", "_id": ' + entry._id + ', "prop": "online", "val": 1}');
     } else {
         logErr({msg: 'attempt to enable entry by non-owner', ws: ws, obj: obj, entry: entry});
     }
@@ -243,24 +282,24 @@ function enableEntry(obj, ws) {
 
 function disconnect(ws)
 {
-    var coinAddress = challs.ask[ws.challenge];
+    var coinAddress = challengeMap.ask[ws.challenge];
     var asks = books.ask.array;
     for(var i = 0; i < asks.length; i++) {
         if(asks[i].address == coinAddress)
             asks[i].online = 0;
     }
 
-    var baseAddress = challs.bid[ws.challenge];
+    var baseAddress = challengeMap.bid[ws.challenge];
     var bids = books.bid.array;
     for(var i = 0; i < bids.length; i++) {
         if(bids[i].address == baseAddress)
             bids[i].online = 0;
     }
 
-    delete socks.bid[challs.bid[ws.challenge]]  
-    delete socks.ask[challs.ask[ws.challenge]]  
-    delete challs.bid[ws.challenge];
-    delete challs.ask[ws.challenge];
+    delete socks.bid[challengeMap.bid[ws.challenge]]  
+    delete socks.ask[challengeMap.ask[ws.challenge]]  
+    delete challengeMap.bid[ws.challenge];
+    delete challengeMap.ask[ws.challenge];
 
     broadcast('{"act": "disconnect", coinAddress: "'+coinAddress+'", baseAddress: "'+baseAddress+'"}');
 }
@@ -271,7 +310,7 @@ function disconnect(ws)
 //obj.price: price of bid or ask
 //
 function cancel(obj, ws, broadcast?: any) {
-    if(challs[obj.entryType][ws.challenge] == maps[obj.entryType][obj._id].address) //ensure this connection owns this entry
+    if(challengeMap[obj.entryType][ws.challenge] == maps[obj.entryType][obj._id].address) //ensure this connection owns this entry
     {
         delete maps[obj.entryType][obj._id];
         var book = books[obj.entryType];
@@ -315,10 +354,18 @@ function removeFromBook(book, obj)
             }
         }
     }
+
+    //subtract book balance
+    var bal = obj.act == 'bid' ? obj.price * obj.amount + baseNode.getInitFee() : obj.amount + coinNode.getInitFee();
+    balanceMap[obj.act][obj.address] = Math.max((balanceMap[obj.act][obj.address] || 0) - bal, 0);
+
+    //subtrace book redeem balance
+    var rbal = obj.act == 'bid' ? coinNode.getRedeemFee() : baseNode.getRedeemFee();
+    balanceMap[oppoAct[obj.act]][obj.redeemAddress] = Math.max((balanceMap[oppoAct[obj.act]][obj.redeemAddress] || 0) - rbal, 0);
 }
 
 function newEntry(entry, ws) {
-    verify(entry, function success() {
+    verify(entry, ws, function success() {
         entry.state = 'active';
         entry.timestamp = new Date();
         entry.tradeAmount = 0;
@@ -326,7 +373,7 @@ function newEntry(entry, ws) {
 
         var newTrades = findMatches(entry);
 
-        getColl(entry).insertOne(prepareInsert(entry), function(err, result) {
+        getColl(entry).insertOne(clean(entry), function(err, result) {
             if(err) {
                 logErr(err);
                 ws.send('{"act": "err", "err": "error inserting entry"}');
@@ -361,9 +408,11 @@ function newEntry(entry, ws) {
                 if(err)
                     logErr(err);
             });
-            broadcast('{"act": "update", "type": "' + oppoAct[entry.act] + '", "_id": ' + trade.id2 + ', "prop": "tradeAmount", "val": ' + trade.amount+ '}');
+            broadcast('{"act": "update", "entryType": "' + oppoAct[entry.act] + '", "_id": ' + trade.id2 + ', "prop": "tradeAmount", "val": ' + trade.amount+ '}');
         }
     }, function failure(err) {
+        if(typeof err === 'string')
+            ws.send(JSON.stringify({"act": "err", "err": err}));
         logErr(err);
         //log ip depending on type of failure
         //consider banning repeat offenders
@@ -412,14 +461,18 @@ function findMatches(initiator) {
 }
 
 function logErr(err) {
+    console.log(typeof err);
     console.log(err);
     mongo.err.insertOne({err: err}, function() {});
+    console.log(JSON.stringify(Object.keys(err)));
 }
 
-function verify(entry, success, fail) {
-    //verify min
-    if(entry.min > entry.amount * entry.price) {
-        fail('min ' + entry.min + ' is > than total size ' + entry.amount + ' * ' + entry.price );
+function verify(entry, ws, success, fail) {
+
+    //verify registry
+    if(challengeMap[entry.act][ws.challenge] != entry.address)
+    {
+        fail('unregistered');
         return;
     }
 
@@ -429,15 +482,24 @@ function verify(entry, success, fail) {
         return;
     }
 
+    var node = getNode(entry);
+
+    var bookBalance = balanceMap[entry.act][entry.address];
+
     //verify nonce 
     getMaxNonce(getColl(entry), entry.address, n => {
         if(n != entry.nonce - 1)
             fail('invalid nonce expecting ' + (n+1) + ' got ' + entry.nonce);
-        else
-            verifySig(entry, success, fail);
+        else {
+            DexUtils.verifyEntry(entry, node, bookBalance, success, fail);
+        }
     }, err => {
         fail(err);
     });
+}
+
+function getFee(entry): number {
+    return entry.act == 'bid' ? baseFeeRate : coinFeeRate;
 }
 
 function getBooks(ws) {
@@ -449,18 +511,18 @@ function getBooks(ws) {
     ws.send(JSON.stringify(result));
 }
 
-function getNonce(obj, ws) {
-    var coinAddress = challs.ask[ws.challenge];
+function getNonce(ws: ExtWebSocket) {
+    var coinAddress = challengeMap.ask[ws.challenge];
     getMaxNonce(mongo.ask, coinAddress, function(n) { 
-        ws.send('{"act": "nonce", "type": "ask", "val": ' + n + '}'); 
+        ws.send('{"act": "nonce", "entryType": "ask", "val": ' + n + '}'); 
     }, function (err) {
         logErr(err);
         ws.send('{"act": "err", "err": "error getting ask nonce"}');
     });
 
-    var baseAddress = challs.bid[ws.challenge];
+    var baseAddress = challengeMap.bid[ws.challenge];
     getMaxNonce(mongo.bid, baseAddress, function(n) { 
-        ws.send('{"act": "nonce", "type": "bid", "val": ' + n + '}'); 
+        ws.send('{"act": "nonce", "entryType": "bid", "val": ' + n + '}'); 
     }, function (err) {
         logErr(err);
         ws.send('{"act": "err", "err": "error getting bid nonce"}');
@@ -475,25 +537,10 @@ function getMaxNonce(coll, address, cb, err) {
     });
 }
 
-function getNode(entry) {
+function getNode(entry): INode {
     if(entry.act == 'bid')
         return baseNode;
     return coinNode;
-}
-
-function verifySig(entry, success, fail) {
-    var msg = JSON.stringify({
-        act: entry.act,
-        address: entry.address,
-        amount: entry.amount,
-        price: entry.price,
-        min: entry.min,
-        nonce: entry.nonce
-    });
-    var nod = getNode(entry);
-    var expected = nod.recover(msg, entry.sig); 
-    if(expected == entry.address)
-        verifyAmt(entry, success, fail)
 }
 
 function verifyRegistration(obj, ws, success, fail) {
@@ -513,20 +560,21 @@ function verifyRegistration(obj, ws, success, fail) {
     success();
 }
 
-function verifyAmt(entry, success, fail)
-{
-    var nod = getNode(entry);
-    nod.getBalance(entry.address, function(err, r) {
-        if(err)
-            fail(err)
-        else {
-            if(r > entry.amount * entry.price)
-                success();
-            else
-                fail('address balance ' + r + ' is less than total size ' + entry.amount + ' * ' + entry.price );
-        }
-    });
+function setFeeRates(obj) {
+    if(obj.adminKey == config.adminKey) {
+        coinFeeRate = Number(obj.coinFeeRate) || coinFeeRate;
+        baseFeeRate = Number(obj.baseFeeRate) || baseFeeRate;
+        coinNode.setFeeRate(coinFeeRate);
+        baseNode.setFeeRate(baseFeeRate);
+    }
+
+    broadcast(feeRateMessage());
 }
+
+function feeRateMessage(): string {
+    return '{"act": "setFeeRates", "coinFeeRate": '+ coinFeeRate + ', "baseFeeRate": ' + baseFeeRate + '}';
+}
+
 
 function createIndexes(obj) {
     if(obj.adminKey == config.adminKey)
@@ -544,16 +592,18 @@ function createIndexes(obj) {
 }
 
 //return new object with only the fields we care about for the database insertion
-function prepareInsert(entry) {
+function clean(entry) {
     return {
         act: entry.act, 
         address: entry.address, 
+        redeemAddress: entry.redeemAddress, 
         amount: entry.amount, 
         price: entry.price, 
-        min: entry.min, 
+        min: entry.min,
         nonce: entry.nonce, 
         sig: entry.sig, 
         state: entry.state, 
+        timestamp: entry.timestamp,
         tradeAmount: entry.tradeAmount 
     }
 }
