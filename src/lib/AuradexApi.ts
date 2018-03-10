@@ -22,7 +22,7 @@ export interface EntryMessage extends MessageBase {
     online?: number;
     tradeAmount?: number;
     timestamp?: Date;
-    _id?: number;
+    _id?: string;
 }
 
 export interface NonceMessage extends MessageBase {
@@ -33,4 +33,10 @@ export interface NonceMessage extends MessageBase {
 export interface KeyValMessage extends MessageBase {
     key: string;
     val: string;
+}
+
+export interface CancelMessage extends MessageBase {
+    entryType: string;
+    _id: string;
+    price: number;
 }

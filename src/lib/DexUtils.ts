@@ -1,5 +1,6 @@
-import { EntryMessage } from './AuradexApi';
+import { EntryMessage, CancelMessage } from './AuradexApi';
 import { INode } from './INode';
+import * as SortedArray from 'sorted-array';
 
 export class DexUtils {
     static verifyEntry(entry: EntryMessage, node: INode, bookBalance: number, success: () => void, fail: (err: any) => void) {
@@ -22,10 +23,10 @@ export class DexUtils {
 
         //verify simple amounts
         if(entry.amount <= 0)
-            fail('amount must be greater than 0');
+        fail('amount must be greater than 0');
 
         if(entry.price <= 0)
-            fail('price must be greater than 0');
+        fail('price must be greater than 0');
 
         //verify sig
         var msg = DexUtils.getSigMessage(entry);
@@ -37,24 +38,18 @@ export class DexUtils {
         }
 
         //verify bidder/asker has enough funds
-        node.getBalance(entry.address, function(err, bal) {
-            if(err)
-                fail('unable to verify balance of entry');
-            else {
-                if(entry.act == 'bid') {
-                    if ((entry.amount * entry.price) + node.getInitFee() > bal)
-                        fail('bidder is short on funds')
-                    else
-                        success();
-                } else if (entry.act == 'ask') {
-                    if (entry.amount + node.getInitFee() > bal)
-                        fail('asker is short on funds')
-                    else
-                        success();
-                } else
-                    fail('unknown entry type ' + entry.act);
-            }
-        });
+        if(entry.act == 'bid') {
+            if ((entry.amount * entry.price) + node.getInitFee() > bal)
+                fail('bidder is short on funds')
+            else
+                success();
+        } else if (entry.act == 'ask') {
+            if (entry.amount + node.getInitFee() > bal)
+                fail('asker is short on funds')
+            else
+                success();
+        } else
+        fail('unknown entry type ' + entry.act);
     }
 
     static verifyRedeemBalanceFull(node: INode, bal: number, success: () => void, fail: (err) => void) {
@@ -63,7 +58,7 @@ export class DexUtils {
         else
             success();
     }
-    
+
     static verifyRedeemBalance(address: string, node: INode, bookBalance: number, success: () => void, fail: (err) => void) {
         node.getBalance(address, function(err, bal) {
             if(err)
@@ -83,5 +78,32 @@ export class DexUtils {
             min: entry.min,
             nonce: entry.nonce
         });
+    }
+
+    static removeFromBook(book: SortedArray, obj: CancelMessage): EntryMessage | null {
+        //sorted-array search find one item with the same price, but we need 
+        //to search up and down from there to check them all in case there are multiple entries at the same price
+        var i: number = book.search(obj); 
+        var j: number;
+        if(i >= 0) {
+            //search up
+            for(j = i; j < book.array.length; j++) {
+                if(book.array[j].price != obj.price)
+                    break;
+                if(book.array[j]._id == obj._id) {
+                    return book.array.splice(j, 1)[0];
+                }
+            }
+
+            //search down
+            for(j = i-1; j >= 0; j--) {
+                if(book.array[j].price != obj.price)
+                    break;
+                if(book.array[j]._id == obj._id) {
+                    return book.array.splice(j, 1)[0];
+                }
+            }
+        }
+        return null;
     }
 }

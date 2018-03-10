@@ -5,7 +5,7 @@ import * as mongodb from 'mongodb';
 import * as SortedArray from 'sorted-array';
 import * as randomstring from 'randomstring';
 
-import { NodeConfig, INode, NodeFactory, DexUtils } from './lib/libauradex';
+import { NodeConfig, INode, NodeFactory, DexUtils, CancelMessage } from './lib/libauradex';
 let config: any = require('./config.json');
 
 
@@ -308,13 +308,19 @@ function disconnect(ws)
 //obj.entryType: bid or ask
 //obj._id: id of bid or ask
 //obj.price: price of bid or ask
-//
-function cancel(obj, ws, broadcast?: any) {
+function cancel(obj: CancelMessage, ws) {
     if(challengeMap[obj.entryType][ws.challenge] == maps[obj.entryType][obj._id].address) //ensure this connection owns this entry
     {
         delete maps[obj.entryType][obj._id];
         var book = books[obj.entryType];
         removeFromBook(book, obj);
+
+        broadcast(JSON.stringify({
+            act: obj.act,
+            entryType: obj.entryType,
+            _id: obj._id,
+            price: obj.price
+        }));
 
         mongo[obj.entryType].find().update({_id: obj._id}, {$set: {state: 'cancel'}}, function(err, count, stat) { 
             if (err) {
@@ -322,46 +328,23 @@ function cancel(obj, ws, broadcast?: any) {
                 ws.send('{"act": "err", "err": "error updating entry"}');
             }
         });
-        broadcast(obj);
+
     }
 }
 
 function removeFromBook(book, obj)
 {
-    //sorted-array search find one item with the same price, but we need 
-    //to search up and down from there to check them all in case there are multiple entries at the same price
-    var i: number = book.search(obj.price); 
-    var j: number;
-    if(i >= 0) {
-        //search up
-        for(j = i; j < book.array.length; j++) {
-            if(book.array[j].price != obj.price)
-                break;
-            if(book.array[j]._id == obj._id) {
-                book.array.splice(j, 1);
-                i = -1; //skip down search loop since we found our id 
-                break;
-            }
-        }
-
-        //search down
-        for(j = i-1; j >= 0; j--) {
-            if(book.array[j].price != obj.price)
-                break;
-            if(book.array[j]._id == obj._id) {
-                book.array.splice(j, 1);
-                break;
-            }
-        }
-    }
+    var entry = DexUtils.removeFromBook(book, obj);
 
     //subtract book balance
-    var bal = obj.act == 'bid' ? obj.price * obj.amount + baseNode.getInitFee() : obj.amount + coinNode.getInitFee();
-    balanceMap[obj.act][obj.address] = Math.max((balanceMap[obj.act][obj.address] || 0) - bal, 0);
+    if(entry) {
+        var bal = entry.act == 'bid' ? entry.price * entry.amount + baseNode.getInitFee() : entry.amount + coinNode.getInitFee();
+        balanceMap[entry.act][entry.address] = Math.max((balanceMap[entry.act][entry.address] || 0) - bal, 0);
 
-    //subtrace book redeem balance
-    var rbal = obj.act == 'bid' ? coinNode.getRedeemFee() : baseNode.getRedeemFee();
-    balanceMap[oppoAct[obj.act]][obj.redeemAddress] = Math.max((balanceMap[oppoAct[obj.act]][obj.redeemAddress] || 0) - rbal, 0);
+        //subtrace book redeem balance
+        var rbal = entry.act == 'bid' ? coinNode.getRedeemFee() : baseNode.getRedeemFee();
+        balanceMap[oppoAct[entry.act]][entry.redeemAddress] = Math.max((balanceMap[oppoAct[entry.act]][entry.redeemAddress] || 0) - rbal, 0);
+    }
 }
 
 function newEntry(entry, ws) {
@@ -545,13 +528,23 @@ function getNode(entry): INode {
 
 function verifyRegistration(obj, ws, success, fail) {
     var msg = ws.challenge;
-    var baseAddress = baseNode.recover(msg, obj.baseSig);
+    var baseAddress;
+    try {
+        baseAddress = baseNode.recover(msg, obj.baseSig);
+    } catch(err) {
+        fail('error trying to recover sig');
+    }
     if(baseAddress != obj.baseAddress) {
         fail('invalid base signature');
         return;
     }
-
-    var coinAddress = coinNode.recover(msg, obj.coinSig);
+    
+    var coinAddress;
+    try {
+        coinAddress = coinNode.recover(msg, obj.coinSig);
+    } catch(err) {
+        fail('error recovering sig');
+    }
     if(coinAddress != obj.coinAddress) {
         fail('invalid coin signature');
         return;
