@@ -418,6 +418,9 @@ function findMatches(initiator) {
         var receiver = book[i];
         if(receiver.online == 1 && compare(receiver.price, initiator.price))
         {
+            if(receiver.redeemAddress == initiator.address) //prevent trading with self, most likely an error
+                return [];
+                
             var receiverSize = (receiver.amount - receiver.tradeAmount) * receiver.price;
             var initiatorSize = (initiator.amount - initiator.tradeAmount) * receiver.price;
             if(receiverSize >= initiator.min && initiatorSize >= receiver.min)
