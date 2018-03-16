@@ -100,7 +100,7 @@ wss.on('connection', (ws: WebSocket) => {
                 default: 
                     messages.add(json);
                     //TODO: some kind of simple verification and spam prevention before broadcasting
-                    broadcast(json);
+                    broadcast(message);
                     break;
             }
         } catch(ex) {
@@ -120,7 +120,7 @@ wss.on('connection', (ws: WebSocket) => {
     //send current items
     messages.array.forEach(a => { ws.send(JSON.stringify(a));});
 
-    broadcast('{"peers":' + wss.clients.size + '}');
+    broadcast('{"act":"peers","peers":' + wss.clients.size + '}');
 
     } catch (err) {
         logErr({err: err, msg: 'fatal error during connection'});

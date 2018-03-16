@@ -1,7 +1,11 @@
 import { ListingMessage, CancelMessage, OfferMessage, AcceptMessage} from './AuradexApi';
 import { INode } from './INode';
+import { BigNumber } from 'bignumber.js';
 import * as SortedArray from 'sorted-array';
 import * as CryptoJS from 'crypto-js';
+
+declare var require: any
+const Web3 = require('web3');
 
 
 export class DexUtils {
@@ -24,11 +28,11 @@ export class DexUtils {
         }
 
         //verify simple amounts
-        if(entry.amount <= 0) {
+        if(entry.amount.isLessThanOrEqualTo(0)) {
             fail('amount must be greater than 0');
         }
 
-        if(entry.price <= 0) {
+        if(entry.price.isLessThanOrEqualTo(0)) {
             fail('price must be greater than 0');
         }
 
@@ -36,12 +40,12 @@ export class DexUtils {
         DexUtils.verifyListingSig(entry, node, entry.address, () => {
             //verify bidder/asker has enough funds
             if(entry.act == 'bid') {
-                if ((entry.amount * entry.price) + node.getInitFee() > bal)
+                if (entry.amount.times(entry.price).plus(node.getInitFee()).isGreaterThan(bal))
                     fail('bidder is short on available funds')
                 else
                     success();
             } else if (entry.act == 'ask') {
-                if (entry.amount + node.getInitFee() > bal)
+                if (entry.amount.plus(node.getInitFee()).isGreaterThan(bal))
                     fail('asker is short on available funds')
                 else
                     success();
@@ -74,12 +78,12 @@ export class DexUtils {
         }
 
         //verify simple amounts
-        if(offer.amount <= 0) {
+        if(offer.amount.isLessThanOrEqualTo(0)) {
             fail('amount must be greater than 0');
             return;
         }
 
-        if(listing.price <= 0) {
+        if(listing.price.isLessThanOrEqualTo(0)) {
             fail('price must be greater than 0');
             return;
         }
@@ -88,12 +92,12 @@ export class DexUtils {
         DexUtils.verifyOfferSig(offer, node, offer.address, () => {
             //verify bidder/asker has enough funds
             if(listing.act == 'ask') {
-                if ((offer.amount * listing.price) + node.getInitFee() > bal)
+                if ((offer.amount.times(listing.price)).plus(node.getInitFee()).isGreaterThan(bal))
                     fail('bidder is short on available funds')
                 else
                     success();
             } else if (listing.act == 'bid') {
-                if (offer.amount + node.getInitFee() > bal)
+                if (offer.amount.plus(node.getInitFee()).isGreaterThan(bal))
                     fail('asker is short on available funds')
                 else
                     success();
@@ -124,11 +128,11 @@ export class DexUtils {
         }
 
         //verify simple amounts
-        if(offer.amount <= 0) {
+        if(offer.amount.isLessThanOrEqualTo(0)) {
             fail('amount must be greater than 0');
         }
 
-        if(listing.price <= 0) {
+        if(listing.price.isLessThanOrEqualTo(0)) {
             fail('price must be greater than 0');
         }
 
@@ -136,12 +140,12 @@ export class DexUtils {
         DexUtils.verifyOfferSig(offer, node, offer.address, () => {
             //verify bidder/asker has enough funds
             if(listing.act == 'bid') {
-                if ((accept.amount * listing.price) + node.getInitFee() > bal)
+                if (accept.amount.times(listing.price).plus(node.getInitFee()).isGreaterThan(bal))
                     fail('bidder is short on available funds')
                 else
                     success();
             } else if (listing.act == 'ask') {
-                if (accept.amount + node.getInitFee() > bal)
+                if (accept.amount.plus(node.getInitFee()).isGreaterThan(bal))
                     fail('asker is short on available funds')
                 else
                     success();
@@ -152,8 +156,8 @@ export class DexUtils {
 
 
 
-    static sha1(message: string): string {
-        return CryptoJS.SHA1(message).toString(CryptoJS.enc.Utf8);
+    static sha3(message: string): string {
+        return Web3.utils.sha3(message);
     }
 
     static getListingSigMessage(listing: ListingMessage): string {
@@ -216,12 +220,12 @@ export class DexUtils {
         DexUtils.verifyGenSig(DexUtils.getAcceptSigMessage(accept), accept.hash, accept.sig, address, node, success, fail);
     }
 
-    private static verifyGenSig(msg: string, hash: string, sig: string, address: string, node: INode, success: () => void, fail: (err) => void) {
+    private static verifyGenSig(msg: string, hash: string | undefined, sig: string | undefined, address: string, node: INode, success: () => void, fail: (err) => void) {
         try {
-            var hsh = DexUtils.sha1(msg);
+            var hsh = DexUtils.sha3(msg);
             if(hsh != hash)
                 fail('hash did not match message')
-            else if(address != node.recover(hash, sig))
+            else if(address != node.recover(hash, sig || ''))
                 fail('invalid signature')
             else
                 success();
@@ -238,7 +242,7 @@ export class DexUtils {
 
     static verifySimpleOffer(offer: OfferMessage, node: INode, success: () => void, fail: (err) => void) {
         try {
-            if(offer.address != node.recover(offer.hash, offer.sig))
+            if(offer.address != node.recover(offer.hash || '', offer.sig || ''))
                 fail('invalid signature');
             else if (DexUtils.UTCTimestamp() - offer.timestamp > offer.duration)
                 fail('offer expired');
@@ -259,24 +263,6 @@ export class DexUtils {
 
     static UTCTimestamp() {
         return Math.floor((new Date()).getTime() / 1000);
-    }
-
-    //TODO: prevent placing order if when not enough redeeming funds
-
-    static verifyRedeemBalanceFull(node: INode, bal: number, success: () => void, fail: (err) => void) {
-        if(bal < node.getRedeemFee())
-            fail('Not enough funds to redeem');
-        else
-            success();
-    }
-
-    static verifyRedeemBalance(address: string, node: INode, bookBalance: number, success: () => void, fail: (err) => void) {
-        node.getBalance(address, function(err, bal) {
-            if(err)
-                fail(err);
-            else
-                DexUtils.verifyRedeemBalanceFull(node, bal - bookBalance, success, fail);
-        });
     }
 
     static removeFromBook(book: SortedArray, obj: CancelMessage): ListingMessage | null {
@@ -300,17 +286,17 @@ export class DexUtils {
                 if(listing.redeemAddress == offer.address) //if you run into your own order, stop searching
                     return matches;
 
-                var listingSize = listing.amount * listing.price;
-                var offerSize = offer.amount * offer.price;
+                var listingSize = listing.amount.times(listing.price);
+                var offerSize = offer.amount.times(offer.price);
                 if(listing.amount >= offer.min && offer.amount >= listing.min)
                 {
                     //add match
-                    var tradeAmount = Math.min(offer.amount, listing.amount);
-                    var newMin = Math.max(offer.min, listing.min);
-                    offer.amount -= tradeAmount;
+                    var tradeAmount = BigNumber.minimum(offer.amount, listing.amount);
+                    var newMin = BigNumber.maximum(offer.min, listing.min);
+                    offer.amount = offer.amount.minus(tradeAmount);
                     matches.push({
                         act: 'offer',
-                        listing: listing.hash,
+                        listing: listing.hash || '',
                         address: offer.address,
                         redeemAddress: offer.redeemAddress,
                         amount: tradeAmount,

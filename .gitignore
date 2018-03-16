@@ -2,6 +2,7 @@
 *.swp
 src/config.json
 src/config.m*.json
+AuradexLocalStorage
 
 # compiled output
 /dist
