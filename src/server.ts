@@ -97,6 +97,7 @@ wss.on('connection', (ws: WebSocket) => {
             {
                 case 'disconnect': disconnect(extWs); break; 
                 case 'setFeeRates': setFeeRates(json); break;
+                case 'books': break; //ignore books
                 default: 
                     messages.add(json);
                     //TODO: some kind of simple verification and spam prevention before broadcasting
