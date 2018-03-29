@@ -62,66 +62,78 @@ wss.on('connection', (ws: WebSocket) => {
 
     try {
 
-    const extWs = ws as ExtWebSocket;
-    extWs .isAlive = true;
+        const extWs = ws as ExtWebSocket;
+        extWs .isAlive = true;
 
-    ws.on('pong', () => {
-        extWs.isAlive = true;
-    });
+        ws.on('pong', () => {
+            extWs.isAlive = true;
+        });
 
-    ws.onerror = ({error}) => {
-        if(error.errno) {
-            disconnect(extWs);
-            return; //ignore connection reset and pipe closed errors
-        }
-        logErr(error);
-    };
-
-    ws.on('error', (err: any) => {
-        if(err.errno == 'ECONNRESET') return;
-        logErr(err);
-    });
-
-    ws.on('close', function() {
-        disconnect(extWs);
-        ws.terminate();
-    });
-
-    //connection is up 
-    ws.on('message', (message: string) => {
-        try {
-            var json = JSON.parse(message);
-
-            //route actions
-            switch(json.act)
-            {
-                case 'disconnect': disconnect(extWs); break; 
-                case 'setFeeRates': setFeeRates(json); break;
-                case 'books': break; //ignore books
-                default: 
-                    messages.add(json);
-                    //TODO: some kind of simple verification and spam prevention before broadcasting
-                    broadcast(message);
-                    break;
+        ws.onerror = ({error}) => {
+            if(error.errno) {
+                disconnect(extWs);
+                return; //ignore connection reset and pipe closed errors
             }
-        } catch(ex) {
+            logErr(error);
+        };
+
+        ws.on('error', (err: any) => {
+            if(err.errno == 'ECONNRESET') return;
+            logErr(err);
+        });
+
+        ws.on('close', function() {
+            disconnect(extWs);
+            ws.terminate();
+        });
+
+        //connection is up 
+        ws.on('message', (message: string) => {
             try {
-                ws.send('{"act": "err", "err": "WHAT... DID YOU... DO!!!"}');
-            } catch { }
+                var json = JSON.parse(message);
 
+                //route actions
+                switch(json.act)
+                {
+                    case 'disconnect': disconnect(extWs); break; 
+                    case 'setFeeRates': setFeeRates(json); break;
+                    case 'books': break; //ignore books
+                    default: 
+                        messages.add(json);
+                        //TODO: some kind of simple verification and spam prevention before broadcasting
+                        broadcast(message);
+                        break;
+                }
+            } catch(ex) {
+                try {
+                    ws.send('{"act": "err", "err": "WHAT... DID YOU... DO!!!"}');
+                } catch { }
+
+                try {
+                    logErr(ex);
+                } catch { }
+            }
+        });
+
+        //TODO: better fee estimation
+        ws.send(feeRateMessage());
+
+        //send current items
+        //remove old items
+        messages.array.forEach(a => { 
             try {
-                logErr(ex);
-            } catch { }
-        }
-    });
+                if(DexUtils.UTCTimestamp() - a.timestamp > 60 * 60 * 24 * 4) {
+                    messages.remove(a.hash);
+                } else {
+                    ws.send(JSON.stringify(a));
+                }
+            } catch(err) {
+                messages.remove(a.hash);
+                logErr(err);
+            }
+        });
 
-    //TODO: better fee estimation
-    ws.send(feeRateMessage());
-
-    //send current items
-    messages.array.forEach(a => { ws.send(JSON.stringify(a));});
-
-    broadcast('{"act":"peers","peers":' + wss.clients.size + '}');
+        broadcast('{"act":"peers","peers":' + wss.clients.size + '}');
 
     } catch (err) {
         logErr({err: err, msg: 'fatal error during connection'});
@@ -136,7 +148,7 @@ function disconnect(ws)
     //TODO: store coin/base addresses on first listing/offer of ws
 }
 
- 
+
 function logErr(err) {
     console.log(typeof err);
     console.log(err);
