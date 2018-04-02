@@ -1,0 +1,4 @@
+{
+    "listening_port": 8998,
+    "local_storage_folder": "./AuradexLocalStorage"
+}

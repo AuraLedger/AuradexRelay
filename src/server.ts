@@ -1,41 +1,59 @@
+const fs = require('fs');
+
 import * as express from 'express';
 import * as http from 'http';
 import * as WebSocket from 'ws';
-import * as SortedArray from 'sorted-array';
-import * as randomstring from 'randomstring';
 
-import { NodeConfig, INode, NodeFactory, DexUtils, CancelMessage, ArrayMap, StoredArrayMap } from './lib/libauradex';
+declare var require: any
+declare var global: any
+
 let config: any = require('./config.json');
+let logger: any = require('simple-node-logger');
 
+var logDir = config.log_dir || './AuradexRelayLogs';
+
+if (!fs.existsSync(logDir)){
+    fs.mkdirSync(logDir);
+}
+
+const loggerOptions= {
+    errorEventName:'error',
+    logDirectory: logDir, 
+    fileNamePattern:'roll-<DATE>.log',
+    dateFormat:'YYYY.MM.DD'
+};
+const log = logger.createRollingFileLogger(loggerOptions);
+log.info('server started');
+
+if (typeof localStorage === 'undefined' || localStorage === null) {
+    var LocalStorage = require('node-localstorage').LocalStorage;
+    (<any>global).localStorage = new LocalStorage(config.local_storage_folder);
+}
 
 interface ExtWebSocket extends WebSocket {
     isAlive: boolean;
-    coinAddress: string;
-    baseAddress: string;
 }
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-const coinNode: INode = NodeFactory.Create(config.coinNodeConfig); 
-const baseNode: INode = NodeFactory.Create(config.baseNodeConfig); 
+var messages = {};
+var expire = ((new Date()).getTime() - 1000 * 60 * 60 * 24 * 4) * 1000; // four days
+//restore non expired messages from local storage on startup
+for(var i = 0; i < localStorage.length; i++)
+{
+    var key = localStorage.key(i);
+    var time = Number(key);
+    if(key && time) {
+        if(time < expire)
+            localStorage.removeItem(key);
+        else
+            messages[time] = localStorage.getItem(key);
+    }
+}
 
-var coinFeeRate: number = config.coinFeeRate;
-var baseFeeRate: number = config.baseFeeRate;
-
-coinNode.setFeeRate(coinFeeRate);
-baseNode.setFeeRate(baseFeeRate);
-
-//TODO: create rest api to pull market history data 
-//TODO: don't allow sending greater than active trades/bids/asks from the wallet
-//consider ipc connection if nodes are local
-
-var messages: StoredArrayMap = new StoredArrayMap('hash');
-
-//TODO: restore listings/offers/accepts from local storage
-
-//commitment fee
+//commitment fee idea
 //allow users to request commitment fees to prevent trolling
 //could be sent to a trusted third party, who will return the fees once the trade is successful
 //watchtowers
@@ -61,7 +79,6 @@ wss.on('error', (err) => {
 wss.on('connection', (ws: WebSocket) => {
 
     try {
-
         const extWs = ws as ExtWebSocket;
         extWs .isAlive = true;
 
@@ -71,7 +88,6 @@ wss.on('connection', (ws: WebSocket) => {
 
         ws.onerror = ({error}) => {
             if(error.errno) {
-                disconnect(extWs);
                 return; //ignore connection reset and pipe closed errors
             }
             logErr(error);
@@ -79,99 +95,53 @@ wss.on('connection', (ws: WebSocket) => {
 
         ws.on('error', (err: any) => {
             if(err.errno == 'ECONNRESET') return;
+            if(err.errno == 'EPIPE') return;
             logErr(err);
         });
 
         ws.on('close', function() {
-            disconnect(extWs);
             ws.terminate();
         });
 
-        //connection is up 
         ws.on('message', (message: string) => {
-            try {
-                var json = JSON.parse(message);
-
-                //route actions
-                switch(json.act)
-                {
-                    case 'disconnect': disconnect(extWs); break; 
-                    case 'setFeeRates': setFeeRates(json); break;
-                    case 'books': break; //ignore books
-                    default: 
-                        messages.add(json);
-                        //TODO: some kind of simple verification and spam prevention before broadcasting
-                        broadcast(message);
-                        break;
-                }
-            } catch(ex) {
-                try {
-                    ws.send('{"act": "err", "err": "WHAT... DID YOU... DO!!!"}');
-                } catch { }
-
-                try {
-                    logErr(ex);
-                } catch { }
-            }
+            var time = (new Date()).getTime() * 1000; //should support 1000 messages per millisecond
+            while(messages.hasOwnProperty(time))
+                time++;
+            messages[time] = message;
+            localStorage.setItem(time.toString(), message);
+            broadcast(message);
         });
 
-        //TODO: better fee estimation
-        ws.send(feeRateMessage());
-
-        //send current items
-        //remove old items
-        messages.array.forEach(a => { 
-            try {
-                if(DexUtils.UTCTimestamp() - a.timestamp > 60 * 60 * 24 * 4) {
-                    messages.remove(a.hash);
-                } else {
-                    ws.send(JSON.stringify(a));
-                }
-            } catch(err) {
-                messages.remove(a.hash);
-                logErr(err);
-            }
-        });
-
+        //update peer count
         broadcast('{"act":"peers","peers":' + wss.clients.size + '}');
+
+        var expired: any = [];
+        var expire = ((new Date()).getTime() - 1000 * 60 * 60 * 24 * 4) * 1000; // four days
+        for (var key in messages) {
+            var time = Number(key);
+            if (time && messages.hasOwnProperty(key)) {
+                if(time < expire)
+                    expired.push(key);
+                else
+                    ws.send(messages[key]);
+            }
+        }
+
+        for(var i = 0; i < expired.length; i++)
+        {
+            delete messages[expired[i]];
+            localStorage.removeItem(expired[i]);
+        }
 
     } catch (err) {
         logErr({err: err, msg: 'fatal error during connection'});
     }
 });
 
-var oppoAct = {bid: 'ask', ask: 'bid'};
-
-function disconnect(ws)
-{
-    //broadcast('{"act": "disconnect", coinAddress: "'+coinAddress+'", baseAddress: "'+baseAddress+'"}');
-    //TODO: store coin/base addresses on first listing/offer of ws
-}
-
-
 function logErr(err) {
     console.log(typeof err);
     console.log(err);
-}
-
-function getFee(entry): number {
-    return entry.act == 'bid' ? baseFeeRate : coinFeeRate;
-}
-
-
-function setFeeRates(obj) {
-    if(obj.adminKey == config.adminKey) {
-        coinFeeRate = Number(obj.coinFeeRate) || coinFeeRate;
-        baseFeeRate = Number(obj.baseFeeRate) || baseFeeRate;
-        coinNode.setFeeRate(coinFeeRate);
-        baseNode.setFeeRate(baseFeeRate);
-    }
-
-    broadcast(feeRateMessage());
-}
-
-function feeRateMessage(): string {
-    return '{"act": "setFeeRates", "coinFeeRate": '+ coinFeeRate + ', "baseFeeRate": ' + baseFeeRate + '}';
+    log.warn(err);
 }
 
 //check for broken connections
@@ -181,7 +151,6 @@ setInterval(() => {
         const extWs = ws as ExtWebSocket;
 
         if (!extWs.isAlive) {
-            disconnect(extWs);
             return ws.terminate();
         }
 
