@@ -7,6 +7,8 @@ import * as WebSocket from 'ws';
 declare var require: any
 declare var global: any
 
+const MAX_MESSAGE_LENGTH = 500;
+
 let config: any = require('./config.json');
 let logger: any = require('simple-node-logger');
 
@@ -104,6 +106,8 @@ wss.on('connection', (ws: WebSocket) => {
         });
 
         ws.on('message', (message: string) => {
+            if(message.length > MAX_MESSAGE_LENGTH)
+                return;
             var time = (new Date()).getTime() * 1000; //should support 1000 messages per millisecond
             while(messages.hasOwnProperty(time))
                 time++;
@@ -116,6 +120,7 @@ wss.on('connection', (ws: WebSocket) => {
         broadcast('{"act":"peers","peers":' + wss.clients.size + '}');
 
         var expired: any = [];
+                var hashes: string[] = [];
         var expire = ((new Date()).getTime() - 1000 * 60 * 60 * 24 * 4) * 1000; // four days
         for (var key in messages) {
             var time = Number(key);
@@ -126,6 +131,8 @@ wss.on('connection', (ws: WebSocket) => {
                     ws.send(messages[key]);
             }
         }
+
+        ws.send('allsent');
 
         for(var i = 0; i < expired.length; i++)
         {
